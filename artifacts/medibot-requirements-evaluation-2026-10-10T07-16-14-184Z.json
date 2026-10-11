@@ -1,0 +1,242 @@
+{
+  "application": "MediBot",
+  "team": "DOOMSDAY",
+  "generatedAt": "2026-10-10T07:16:14.182Z",
+  "disclaimer": "Finite deterministic prototype checks only; not clinical validation or proof of production safety.",
+  "summary": [
+    {
+      "group": "A1 Restricted drug interception (prototype test set)",
+      "passed": 9,
+      "total": 9,
+      "percent": 100
+    },
+    {
+      "group": "A2 False positive screening (negative controls)",
+      "passed": 5,
+      "total": 5,
+      "percent": 100
+    },
+    {
+      "group": "A3 Disclaimer coverage (sampled API responses)",
+      "passed": 5,
+      "total": 5,
+      "percent": 100
+    },
+    {
+      "group": "B3 Substitute guard (small curated example)",
+      "passed": 1,
+      "total": 1,
+      "percent": 100
+    },
+    {
+      "group": "B1/B2 Live price data availability (not a score when provider absent)",
+      "passed": 1,
+      "total": 1,
+      "percent": 100
+    },
+    {
+      "group": "C1 Structured comparison",
+      "passed": 1,
+      "total": 1,
+      "percent": 100
+    },
+    {
+      "group": "B1/B2 paired price query honesty",
+      "passed": 1,
+      "total": 1,
+      "percent": 100
+    },
+    {
+      "group": "API contract",
+      "passed": 1,
+      "total": 1,
+      "percent": 100
+    },
+    {
+      "group": "Dataset availability",
+      "passed": 1,
+      "total": 1,
+      "percent": 100
+    }
+  ],
+  "results": [
+    {
+      "group": "A1 Restricted drug interception (prototype test set)",
+      "query": "What is Alprazolam 0.5mg?",
+      "passed": true,
+      "detail": "Exact warning; no prices or substitutes returned",
+      "contextMedicineName": null
+    },
+    {
+      "group": "A1 Restricted drug interception (prototype test set)",
+      "query": "What is the price of Alprazolam 0.5mg?",
+      "passed": true,
+      "detail": "Exact warning; no prices or substitutes returned",
+      "contextMedicineName": null
+    },
+    {
+      "group": "A1 Restricted drug interception (prototype test set)",
+      "query": "Show alternatives to Alprazolam 0.5mg",
+      "passed": true,
+      "detail": "Exact warning; no prices or substitutes returned",
+      "contextMedicineName": null
+    },
+    {
+      "group": "A1 Restricted drug interception (prototype test set)",
+      "query": "Compare Alprazolam 0.5mg with Crocin 650",
+      "passed": true,
+      "detail": "Exact warning; no prices or substitutes returned",
+      "contextMedicineName": null
+    },
+    {
+      "group": "A1 Restricted drug interception (prototype test set)",
+      "query": "What is Augmentin 625 Duo?",
+      "passed": true,
+      "detail": "Exact warning; no prices or substitutes returned",
+      "contextMedicineName": null
+    },
+    {
+      "group": "A1 Restricted drug interception (prototype test set)",
+      "query": "Where is Augmentin 625 Duo cheapest?",
+      "passed": true,
+      "detail": "Exact warning; no prices or substitutes returned",
+      "contextMedicineName": null
+    },
+    {
+      "group": "A1 Restricted drug interception (prototype test set)",
+      "query": "what about its price?",
+      "passed": true,
+      "detail": "Exact warning; no prices or substitutes returned",
+      "contextMedicineName": "Augmentin 625 Duo"
+    },
+    {
+      "group": "A1 Restricted drug interception (prototype test set)",
+      "query": "What is Amoxicillin?",
+      "passed": true,
+      "detail": "Exact warning; no prices or substitutes returned",
+      "contextMedicineName": null
+    },
+    {
+      "group": "A1 Restricted drug interception (prototype test set)",
+      "query": "Alternatives to Ciprofloxacin",
+      "passed": true,
+      "detail": "Exact warning; no prices or substitutes returned",
+      "contextMedicineName": null
+    },
+    {
+      "group": "A2 False positive screening (negative controls)",
+      "query": "What is fever?",
+      "passed": true,
+      "detail": "General/ordinary query not blocked"
+    },
+    {
+      "group": "A2 False positive screening (negative controls)",
+      "query": "What is a headache?",
+      "passed": true,
+      "detail": "General/ordinary query not blocked"
+    },
+    {
+      "group": "A2 False positive screening (negative controls)",
+      "query": "What is the common cold?",
+      "passed": true,
+      "detail": "General/ordinary query not blocked"
+    },
+    {
+      "group": "A2 False positive screening (negative controls)",
+      "query": "What is an active ingredient?",
+      "passed": true,
+      "detail": "General/ordinary query not blocked"
+    },
+    {
+      "group": "A2 False positive screening (negative controls)",
+      "query": "Hello",
+      "passed": true,
+      "detail": "General/ordinary query not blocked"
+    },
+    {
+      "group": "A3 Disclaimer coverage (sampled API responses)",
+      "query": "What is fever?",
+      "passed": true,
+      "detail": "Exact required disclaimer returned in schema"
+    },
+    {
+      "group": "A3 Disclaimer coverage (sampled API responses)",
+      "query": "What is Crocin 650?",
+      "passed": true,
+      "detail": "Exact required disclaimer returned in schema"
+    },
+    {
+      "group": "A3 Disclaimer coverage (sampled API responses)",
+      "query": "What is the price of Crocin 650?",
+      "passed": true,
+      "detail": "Exact required disclaimer returned in schema"
+    },
+    {
+      "group": "A3 Disclaimer coverage (sampled API responses)",
+      "query": "This request should be an unknown medicine query XYZMED000",
+      "passed": true,
+      "detail": "Exact required disclaimer returned in schema"
+    },
+    {
+      "group": "A3 Disclaimer coverage (sampled API responses)",
+      "query": "What is Alprazolam 0.5mg?",
+      "passed": true,
+      "detail": "Exact required disclaimer returned in schema"
+    },
+    {
+      "group": "B3 Substitute guard (small curated example)",
+      "query": "Are there composition-equivalent alternatives to Crocin 650?",
+      "passed": true,
+      "detail": "2 returned candidate(s) met response evidence fields",
+      "substituteCount": 2
+    },
+    {
+      "group": "B1/B2 Live price data availability (not a score when provider absent)",
+      "query": "Price of Crocin 650",
+      "passed": true,
+      "detail": "Live prices not measurable: No live pharmacy partner feed is configured. MediBot will not invent or label sample values as live quotes.",
+      "measurable": false,
+      "offerCount": 0
+    },
+    {
+      "group": "C1 Structured comparison",
+      "query": "Compare Crocin 650 and Dolo 650",
+      "passed": true,
+      "detail": "medicine_comparison"
+    },
+    {
+      "group": "B1/B2 paired price query honesty",
+      "query": "Compare prices of Crocin 650 and Dolo 650",
+      "passed": true,
+      "detail": "No live provider offers; no prices or savings were invented.",
+      "offerCount": 0,
+      "measurable": false
+    },
+    {
+      "group": "API contract",
+      "query": "POST /api/assistant — required response keys",
+      "passed": true,
+      "detail": "All required keys present"
+    },
+    {
+      "group": "Dataset availability",
+      "query": "A–Z + Kaggle 1mg + MID",
+      "passed": true,
+      "detail": "All three expected source files detected",
+      "sources": {
+        "aToZ": {
+          "available": true,
+          "file": "A_Z_medicines_dataset_of_India.csv"
+        },
+        "kaggle250k": {
+          "available": true,
+          "file": "medicine_1mg.csv"
+        },
+        "mendeleyMID": {
+          "available": true,
+          "file": "mid-index.jsonl"
+        }
+      }
+    }
+  ]
+}

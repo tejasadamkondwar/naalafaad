@@ -1,0 +1,816 @@
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
+import ExcelJS from "exceljs";
+import { medicines } from "../../../data/medicines";
+import { additionalMedicines } from "../../../data/medibot-additional-medicines";
+import type { Medicine } from "../../../data/medicines";
+
+/**
+ * MediBot local multi-dataset search.
+ *
+ * Sources supported:function headerKey(value: string): string {
+ *   1. data/A_Z_medicines_dataset_of_India.csv (included in this patch)
+ *   2. data/medicine_1mg.csv (Kaggle 250k medicines usage/side-effects dataset)
+ *   3. data/MID.xlsx (Mendeley Medicines Information Dataset)
+ *
+ * Source data is descriptive/reference information only. Dataset substitutes are
+ * never copied into Medicine.alternatives and never drive recommendations.
+ * Uncurated records are always marked schedule="Unverified". We do not infer
+ * prescription class, active-ingredient equivalence, live availability, or a
+ * real-time pharmacy quote from these datasets.
+ */
+
+type AtoZRecord = {
+  name: string;
+  price: number | null;
+  discontinued: boolean;
+  manufacturer: string;
+  productType: string;
+  packSize: string;
+  composition1: string;
+  composition2: string;
+  source: string;
+};
+
+type DatasetDetails = {
+  composition?: string;
+  introduction?: string;
+  uses?: string;
+  benefits?: string;
+  sideEffects?: string;
+  howItWorks?: string;
+  quickTips?: string;
+  chemicalClass?: string;
+  therapeuticClass?: string;
+  actionClass?: string;
+  habitForming?: string;
+  alcoholSafety?: string;
+  drivingSafety?: string;
+  pregnancySafety?: string;
+  breastfeedingSafety?: string;
+  kidneySafety?: string;
+  liverSafety?: string;
+  listedSubstitutes?: string[];
+};
+
+type DatasetIndex = {
+  available: boolean;
+  records: number;
+  names: string[];
+  index: Map<string, DatasetDetails>;
+  file: string;
+  error?: string;
+};
+
+type AtoZIndex = {
+  available: boolean;
+  records: AtoZRecord[];
+  file: string;
+  error?: string;
+};
+
+type SearchCandidate = {
+  key: string;
+  name: string;
+  form: string;
+  score: number;
+  sourceRank: number;
+  aToZ?: AtoZRecord;
+  oneMgName?: string;
+  midName?: string;
+};
+
+const DATA_DIR = path.join(process.cwd(), "data");
+const ATOZ_FILE = path.join(DATA_DIR, "A_Z_medicines_dataset_of_India.csv");
+const ONE_MG_CANDIDATE_FILES = [
+  path.join(DATA_DIR, "medicine_1mg.csv"),
+  path.join(DATA_DIR, "250k Medicines Usage, Side Effects and Substitutes.csv"),
+  path.join(DATA_DIR, "250k_medicines_usage_side_effects_and_substitutes.csv"),
+  path.join(DATA_DIR, "250k_medicines.csv"),
+];
+const MID_CANDIDATE_FILES = [
+  path.join(DATA_DIR, "MID.xlsx"),
+  path.join(DATA_DIR, "MID (1).xlsx"),
+  path.join(DATA_DIR, "Medicines Information Dataset.xlsx"),
+];
+
+const curatedCatalog: Medicine[] = [...medicines, ...additionalMedicines];
+let aToZPromise: Promise<AtoZIndex> | null = null;
+let midPromise: Promise<DatasetIndex> | null = null;
+let oneMgPromise: Promise<DatasetIndex> | null = null;
+
+const FORM_AND_UNIT_WORDS = new Set([
+  "tablet", "tablets", "tab", "tabs", "capsule", "capsules", "cap", "caps",
+  "syrup", "suspension", "injection", "injections", "solution", "drops", "drop",
+  "cream", "ointment", "gel", "spray", "powder", "sachet", "strip", "bottle",
+  "mg", "mcg", "μg", "g", "gm", "ml", "iu", "units", "unit", "of", "for",
+]);
+const QUERY_STOP_WORDS = new Set([
+  ...FORM_AND_UNIT_WORDS,
+  "what", "is", "are", "was", "were", "the", "a", "an", "and", "or", "but",
+  "in", "on", "at", "to", "from", "by", "with", "about", "tell", "me", "give",
+  "show", "find", "search", "look", "up", "please", "can", "could", "would",
+  "do", "does", "did", "contain", "contains", "containing", "composition", "info",
+  "information", "details", "detail", "medicine", "medicines", "drug", "drugs",
+  "price", "prices", "cost", "costs", "cheapest", "cheap", "cheaper", "mrp",
+  "compare", "comparison", "versus", "vs", "alternative", "alternatives", "substitute",
+  "substitutes", "instead", "where", "how", "much", "available", "buy", "manufacturer",
+  "company", "type", "uses", "side", "effects", "benefits", "contains",
+]);
+
+function cleanText(value: unknown, maxLength = 1800): string {
+  if (value == null) return "";
+  const text = String(value).trim();
+  if (!text || /^(?:nan|null|none|n\/a|na|not available)$/i.test(text)) return "";
+  return text.slice(0, maxLength);
+}
+
+function nameKey(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/(\d+(?:\.\d+)?)\s*(?:mg|mcg|μg|g|gm|ml|iu)\b/gi, "$1")
+    .replace(/\b(?:tablets?|tabs?|capsules?|caps?|syrup|suspension|injections?|solution|drops?|cream|ointment|gel|spray|powder|oral\s+suspension)\b/gi, " ")
+    .replace(/[^a-z0-9.]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function medicineTokens(value: string): string[] {
+  return nameKey(value).split(" ").filter(Boolean);
+}
+
+function queryTokens(value: string): string[] {
+  return value
+    .toLowerCase()
+    .replace(/(\d+(?:\.\d+)?)\s*(?:mg|mcg|μg|g|gm|ml|iu)\b/gi, "$1")
+    .replace(/[^a-z0-9.]+/g, " ")
+    .split(/\s+/)
+    .filter((token) => token && !QUERY_STOP_WORDS.has(token));
+}
+
+/** CSV parser for quoted commas, escaped quotes, UTF-8 BOM, and CRLF line endings. */
+function forEachCsvRecord(content: string, onRecord: (row: Record<string, string>) => void): void {
+  let headers: string[] | null = null;
+  let row: string[] = [];
+  let field = "";
+  let quoted = false;
+
+  const pushField = () => {
+    row.push(field.trim());
+    field = "";
+  };
+  const pushRow = () => {
+    pushField();
+    if (!headers) {
+      headers = row.map((header) => header.replace(/^\uFEFF/, "").trim().toLowerCase());
+    } else if (row.some((cell) => cell.trim() !== "")) {
+      const object: Record<string, string> = {};
+      headers.forEach((header, index) => (object[header] = row[index] ?? ""));
+      onRecord(object);
+    }
+    row = [];
+  };
+
+  for (let i = 0; i < content.length; i++) {
+    const char = content[i];
+    if (char === '"') {
+      if (quoted && content[i + 1] === '"') {
+        field += '"';
+        i++;
+      } else {
+        quoted = !quoted;
+      }
+    } else if (char === "," && !quoted) {
+      pushField();
+    } else if ((char === "\n" || char === "\r") && !quoted) {
+      if (char === "\r" && content[i + 1] === "\n") i++;
+      pushRow();
+    } else {
+      field += char;
+    }
+  }
+  if (field.length > 0 || row.length > 0) pushRow();
+}
+
+function parseAtoZCatalog(content: string): AtoZRecord[] {
+  const output: AtoZRecord[] = [];
+  forEachCsvRecord(content, (row) => {
+    const name = cleanText(row.name, 300);
+    if (!name) return;
+    const rawPrice = (row["price(₹)"] ?? row.price ?? "").replace(/[₹,\s]/g, "");
+    const parsedPrice = Number(rawPrice);
+    const discontinued = /^(true|1|yes|y)$/i.test(row.is_discontinued ?? "");
+    output.push({
+      name,
+      price: Number.isFinite(parsedPrice) && parsedPrice > 0 ? parsedPrice : null,
+      discontinued,
+      manufacturer: cleanText(row.manufacturer_name, 500),
+      productType: cleanText(row.type, 100),
+      packSize: cleanText(row.pack_size_label, 300),
+      composition1: cleanText(row.short_composition1 ?? row["salt composition"], 800),
+      composition2: cleanText(row.short_composition2, 800),
+      source: "A–Z Medicine Dataset of India",
+    });
+  });
+  return output;
+}
+
+async function getAtoZCatalog(): Promise<AtoZIndex> {
+  if (!aToZPromise) {
+    aToZPromise = Promise.resolve().then(() => {
+      if (!existsSync(ATOZ_FILE)) {
+        return { available: false, records: [], file: path.basename(ATOZ_FILE), error: "File not found" };
+      }
+      try {
+        return {
+          available: true,
+          records: parseAtoZCatalog(readFileSync(ATOZ_FILE, "utf8")),
+          file: path.basename(ATOZ_FILE),
+        };
+      } catch (error) {
+        return {
+          available: false,
+          records: [],
+          file: path.basename(ATOZ_FILE),
+          error: error instanceof Error ? error.message : "Could not parse CSV",
+        };
+      }
+    });
+  }
+  return aToZPromise;
+}
+
+
+
+function headerKey(value: string): string {
+  return String(value ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+
+
+function pick(row: Record<string, unknown>, aliases: string[]): string {
+  const entries = Object.entries(row);
+  for (const alias of aliases) {
+    const wanted = headerKey(alias);
+    const found = entries.find(([key]) => headerKey(key) === wanted);
+    if (found && found[1] != null) {
+      const value = cleanText(found[1]);
+      if (value) return value;
+    }
+  }
+  return "";
+}
+
+function collectColumns(row: Record<string, string>, prefixes: string[], maxChars = 1500): string {
+  const values: string[] = [];
+  const wantedPrefixes = prefixes.map(headerKey);
+  for (const [key, rawValue] of Object.entries(row)) {
+    const normalized = headerKey(key);
+    if (!wantedPrefixes.some((prefix) => normalized === prefix || normalized.startsWith(prefix))) continue;
+    const value = cleanText(rawValue, 1800);
+    if (!value || values.includes(value)) continue;
+    values.push(value);
+    if (values.join("; ").length >= maxChars) break;
+  }
+  return values.join("; ").slice(0, maxChars);
+}
+
+function splitList(value: string, maxItems = 8): string[] {
+  return [...new Set(value.split(/\s*;\s*/).map((item) => item.trim()).filter(Boolean))].slice(0, maxItems);
+}
+
+function inferForm(packSize: string, name: string): string {
+  const source = `${packSize} ${name}`.toLowerCase();
+  if (/tablet|\btab\b/.test(source)) return "Tablet";
+  if (/capsule|\bcap\b/.test(source)) return "Capsule";
+  if (/syrup/.test(source)) return "Syrup";
+  if (/oral\s+suspension|suspension/.test(source)) return "Suspension";
+  if (/injection|injectable/.test(source)) return "Injection";
+  if (/eye\s*drops?|ear\s*drops?|\bdrops?\b/.test(source)) return "Drops";
+  if (/cream/.test(source)) return "Cream";
+  if (/ointment/.test(source)) return "Ointment";
+  if (/gel/.test(source)) return "Gel";
+  if (/spray|inhaler/.test(source)) return "Spray";
+  if (/powder|sachet/.test(source)) return "Powder";
+  if (/solution/.test(source)) return "Solution";
+  if (/lotion/.test(source)) return "Lotion";
+  if (/patch/.test(source)) return "Patch";
+  if (/suspension/.test(source)) return "Suspension";
+  return "Unverified";
+}
+
+function detailKey(name: string, form: string): string {
+  return `${nameKey(name)}|${form.toLowerCase()}`;
+}
+
+function mergeDetails(primary?: DatasetDetails, secondary?: DatasetDetails): DatasetDetails | undefined {
+  if (!primary && !secondary) return undefined;
+  const output: DatasetDetails = { ...(secondary ?? {}), ...(primary ?? {}) };
+  if (primary?.listedSubstitutes || secondary?.listedSubstitutes) {
+    output.listedSubstitutes = [...new Set([...(primary?.listedSubstitutes ?? []), ...(secondary?.listedSubstitutes ?? [])])].slice(0, 8);
+  }
+  return output;
+}
+
+function detailToFields(details?: DatasetDetails): Partial<Medicine> {
+  if (!details) return {};
+  return {
+    datasetIntroduction: details.introduction || undefined,
+    datasetUses: details.uses || undefined,
+    datasetBenefits: details.benefits || undefined,
+    datasetSideEffects: details.sideEffects || undefined,
+    datasetHowItWorks: details.howItWorks || undefined,
+    datasetQuickTips: details.quickTips || undefined,
+    datasetChemicalClass: details.chemicalClass || undefined,
+    datasetTherapeuticClass: details.therapeuticClass || undefined,
+    datasetActionClass: details.actionClass || undefined,
+    datasetHabitForming: details.habitForming || undefined,
+    datasetSafetyAlcohol: details.alcoholSafety || undefined,
+    datasetSafetyDriving: details.drivingSafety || undefined,
+    datasetSafetyPregnancy: details.pregnancySafety || undefined,
+    datasetSafetyBreastfeeding: details.breastfeedingSafety || undefined,
+    datasetSafetyKidney: details.kidneySafety || undefined,
+    datasetSafetyLiver: details.liverSafety || undefined,
+    datasetListedSubstitutes: details.listedSubstitutes?.length ? details.listedSubstitutes : undefined,
+  };
+}
+
+function makeDetails(row: Record<string, string>): DatasetDetails {
+  const uses = pick(row, ["uses", "indications", "use"]) || collectColumns(row, ["use"]);
+  const sideEffects = pick(row, ["side effects", "side_effects", "sideeffects"]) || collectColumns(row, ["sideeffect", "side_effect"]);
+  const benefits = pick(row, ["benefits"]) || collectColumns(row, ["benefit"]);
+  const listedSubstitutes = splitList(collectColumns(row, ["substitute"], 1000));
+  return {
+    composition: pick(row, ["contains", "salt composition", "composition", "active ingredient", "active ingredients"]),
+    introduction: pick(row, ["introduction", "description", "drug introduction"]),
+    uses,
+    benefits,
+    sideEffects,
+    howItWorks: pick(row, ["how the drug works", "how drug works", "how it works", "mechanism of action"]),
+    // Do not expose raw dataset dosage/how-to-use text because it can be misread as individualized dosing advice.
+    quickTips: pick(row, ["quick tips", "quick_tips"]),
+    chemicalClass: pick(row, ["chemical class", "chemical_class"]),
+    therapeuticClass: pick(row, ["therapeutic class", "therapeutic_class"]),
+    actionClass: pick(row, ["action class", "action_class"]),
+    habitForming: pick(row, ["habit forming", "habit_forming"]),
+    alcoholSafety: pick(row, ["safety advice to alcohol", "alcohol safety"]),
+    drivingSafety: pick(row, ["safety advice to driving", "driving safety"]),
+    pregnancySafety: pick(row, ["safety advice to pregnancy", "pregnancy safety"]),
+    breastfeedingSafety: pick(row, ["safety advice to breastfeeding", "breastfeeding safety"]),
+    kidneySafety: pick(row, ["safety advice to kidney", "kidney safety"]),
+    liverSafety: pick(row, ["safety advice to the liver", "safety advice to liver", "liver safety"]),
+    listedSubstitutes,
+  };
+}
+
+function mergeDetailsIntoIndex(index: Map<string, DatasetDetails>, key: string, details: DatasetDetails): void {
+  index.set(key, mergeDetails(index.get(key), details) ?? details);
+}
+
+function spreadsheetCellText(value: unknown, maxLength = 1800): string {
+  if (value == null) return "";
+  if (typeof value === "object") {
+    const cell = value as Record<string, unknown>;
+    if (typeof cell.text === "string") return cleanText(cell.text, maxLength);
+    if (Array.isArray(cell.richText)) {
+      return cleanText(cell.richText.map((part) => {
+        if (part && typeof part === "object" && "text" in part) return String((part as { text?: unknown }).text ?? "");
+        return "";
+      }).join(""), maxLength);
+    }
+    if (cell.result !== undefined) return spreadsheetCellText(cell.result, maxLength);
+    if (cell.hyperlink && cell.text) return cleanText(cell.text, maxLength);
+    return "";
+  }
+  return cleanText(value, maxLength);
+}
+
+/**
+ * MID.xlsx contains a very large worksheet XML. SheetJS tries to materialize
+ * that XML as one JS string and can exceed Node's maximum string length. Use
+ * ExcelJS's streaming reader and retain only fields used by MediBot.
+ */
+async function loadMidIndexFromStream(file: string): Promise<DatasetIndex> {
+  const index = new Map<string, DatasetDetails>();
+  const names: string[] = [];
+  const seenNames = new Set<string>();
+  let rowCount = 0;
+  let headers: string[] | null = null;
+  let nameColumn = -1;
+  let column = {
+    composition: -1,
+    introduction: -1,
+    uses: -1,
+    benefits: -1,
+    sideEffects: -1,
+    howItWorks: -1,
+    quickTips: -1,
+    chemicalClass: -1,
+    therapeuticClass: -1,
+    actionClass: -1,
+    habitForming: -1,
+    alcoholSafety: -1,
+    drivingSafety: -1,
+    pregnancySafety: -1,
+    breastfeedingSafety: -1,
+    kidneySafety: -1,
+    liverSafety: -1,
+  };
+
+  const findColumn = (headerValues: string[], aliases: string[]): number => {
+    for (const alias of aliases) {
+      const wanted = headerKey(alias);
+      const found = headerValues.findIndex((header) => headerKey(header) === wanted);
+      if (found >= 0) return found;
+    }
+    return -1;
+  };
+
+  try {
+    const reader = new ExcelJS.stream.xlsx.WorkbookReader(file, {
+      worksheets: "emit",
+      sharedStrings: "cache",
+      hyperlinks: "ignore",
+      styles: "ignore",
+    });
+
+    let worksheetFound = false;
+    for await (const worksheet of reader) {
+      worksheetFound = true;
+      for await (const row of worksheet) {
+        const values: unknown[] = Array.isArray(row.values) ? row.values : [];
+        if (!headers) {
+          // ExcelJS arrays are 1-based (index 0 is intentionally blank).
+          headers = values.map((value) => spreadsheetCellText(value, 200));
+          nameColumn = findColumn(headers, ["name", "medicine name", "drug name"]);
+          column = {
+            composition: findColumn(headers, ["contains", "salt composition", "composition", "active ingredient"]),
+            introduction: findColumn(headers, ["introduction", "description"]),
+            uses: findColumn(headers, ["uses", "indications", "use"]),
+            benefits: findColumn(headers, ["benefits"]),
+            sideEffects: findColumn(headers, ["side effect", "side_effect", "side effects", "side_effects", "sideeffects"]),
+            howItWorks: findColumn(headers, ["how works", "how_works", "how the drug works", "how drug works", "how it works", "mechanism of action"]),
+            quickTips: findColumn(headers, ["quick tips", "quick_tips"]),
+            chemicalClass: findColumn(headers, ["chemical class", "chemical_class"]),
+            therapeuticClass: findColumn(headers, ["therapeutic class", "therapeutic_class"]),
+            actionClass: findColumn(headers, ["action class", "action_class"]),
+            habitForming: findColumn(headers, ["habit forming", "habit_forming"]),
+            alcoholSafety: findColumn(headers, ["safety advice to alcohol", "alcohol safety"]),
+            drivingSafety: findColumn(headers, ["safety advice to driving", "driving safety"]),
+            pregnancySafety: findColumn(headers, ["safety advice to pregnancy", "pregnancy safety"]),
+            breastfeedingSafety: findColumn(headers, ["safety advice to breast feeding", "safety advice to breastfeeding", "breastfeeding safety"]),
+            kidneySafety: findColumn(headers, ["safety advice to kidney", "kidney safety"]),
+            liverSafety: findColumn(headers, ["safety advice to liver", "safety advice to the liver", "liver safety"]),
+          };
+          if (nameColumn < 0) {
+            return {
+              available: false,
+              records: 0,
+              names: [],
+              index: new Map<string, DatasetDetails>(),
+              file: path.basename(file),
+              error: `Could not find a medicine name column. Detected headers: ${headers.map((header) => header || "(blank)").join(", ")}`,
+            };
+          }
+          continue;
+        }
+
+        const get = (columnIndex: number, limit = 1800): string =>
+          columnIndex < 0 ? "" : spreadsheetCellText(values[columnIndex], limit);
+        const name = get(nameColumn, 300);
+        if (!name) continue;
+
+        rowCount += 1;
+        const normName = name.toLowerCase().replace(/\s+/g, " ").trim();
+        if (!seenNames.has(normName)) {
+          names.push(name);
+          seenNames.add(normName);
+        }
+        const form = inferForm("", name);
+        const details: DatasetDetails = {
+          composition: get(column.composition),
+          introduction: get(column.introduction),
+          uses: get(column.uses),
+          benefits: get(column.benefits),
+          sideEffects: get(column.sideEffects),
+          howItWorks: get(column.howItWorks),
+          quickTips: get(column.quickTips),
+          chemicalClass: get(column.chemicalClass),
+          therapeuticClass: get(column.therapeuticClass),
+          actionClass: get(column.actionClass),
+          habitForming: get(column.habitForming),
+          alcoholSafety: get(column.alcoholSafety),
+          drivingSafety: get(column.drivingSafety),
+          pregnancySafety: get(column.pregnancySafety),
+          breastfeedingSafety: get(column.breastfeedingSafety),
+          kidneySafety: get(column.kidneySafety),
+          liverSafety: get(column.liverSafety),
+        };
+        if (Object.values(details).some((value) => typeof value === "string" && Boolean(value))) {
+          mergeDetailsIntoIndex(index, detailKey(name, form), details);
+        }
+      }
+      // The supplied MID workbook has one worksheet (Sheet1). Intentionally
+      // process the first sheet only to avoid duplicating a second copy.
+      break;
+    }
+
+    if (!worksheetFound || !headers) {
+      return { available: false, records: 0, names: [], index, file: path.basename(file), error: "Streaming reader did not find a readable worksheet header row." };
+    }
+    if (rowCount === 0) {
+      return { available: false, records: 0, names: [], index, file: path.basename(file), error: "MID worksheet parsed, but no medicine rows were found after the header." };
+    }
+    return { available: true, records: rowCount, names, index, file: path.basename(file) };
+  } catch (error) {
+    return {
+      available: false,
+      records: 0,
+      names: [],
+      index: new Map<string, DatasetDetails>(),
+      file: path.basename(file),
+      error: error instanceof Error ? error.message : "Could not stream MID workbook.",
+    };
+  }
+}
+
+async function getMidIndex(): Promise<DatasetIndex> {
+  if (!midPromise) {
+    midPromise = (async () => {
+      const file = MID_CANDIDATE_FILES.find(existsSync);
+      const defaultFile = path.basename(MID_CANDIDATE_FILES[0]);
+      if (!file) {
+        return {
+          available: false,
+          records: 0,
+          names: [],
+          index: new Map<string, DatasetDetails>(),
+          file: defaultFile,
+          error: "Download MID.xlsx from Mendeley Data and put it in the root data folder.",
+        };
+      }
+      return loadMidIndexFromStream(file);
+    })();
+  }
+  return midPromise;
+}
+
+async function getOneMgIndex(): Promise<DatasetIndex> {
+  if (!oneMgPromise) {
+    oneMgPromise = Promise.resolve().then(() => {
+      const file = ONE_MG_CANDIDATE_FILES.find(existsSync);
+      const defaultFile = path.basename(ONE_MG_CANDIDATE_FILES[0]);
+      const index = new Map<string, DatasetDetails>();
+      const names: string[] = [];
+      if (!file) return { available: false, records: 0, names, index, file: defaultFile, error: "Download the Kaggle 250k medicines CSV and save it as medicine_1mg.csv in the data folder." };
+      try {
+        const content = readFileSync(file, "utf8");
+        const nameSet = new Set<string>();
+        let rowCount = 0;
+        forEachCsvRecord(content, (row) => {
+          const name = pick(row, ["name", "medicine name", "medicine_name", "med_name"]);
+          if (!name) return;
+          rowCount++;
+          const normalizedName = name.toLowerCase().replace(/\s+/g, " ").trim();
+          if (!nameSet.has(normalizedName)) {
+            names.push(name.slice(0, 300));
+            nameSet.add(normalizedName);
+          }
+          const form = inferForm("", name);
+          const details = makeDetails(row);
+          if (Object.values(details).some((value) => Array.isArray(value) ? value.length > 0 : Boolean(value))) {
+            mergeDetailsIntoIndex(index, detailKey(name, form), details);
+          }
+        });
+        return { available: true, records: rowCount, names, index, file: path.basename(file) };
+      } catch (error) {
+        return { available: false, records: 0, names: [], index, file: path.basename(file), error: error instanceof Error ? error.message : "Could not read Kaggle CSV." };
+      }
+    });
+  }
+  return oneMgPromise;
+}
+
+function curatedMatch(name: string, packSize = ""): Medicine | undefined {
+  const key = nameKey(name);
+  const inferredForm = inferForm(packSize, name);
+  return curatedCatalog.find((item) =>
+    nameKey(item.name) === key &&
+    inferredForm !== "Unverified" &&
+    item.dosageForm.toLowerCase() === inferredForm.toLowerCase()
+  );
+}
+
+function scoreName(name: string, query: string[]): number {
+  const tokens = medicineTokens(name);
+  if (!tokens.length || !query.length) return 0;
+  for (let start = 0; start <= query.length - tokens.length; start++) {
+    if (tokens.every((token, index) => query[start + index] === tokens[index])) {
+      return 1000 + tokens.length * 10;
+    }
+  }
+  if (query.length === 1 && tokens.includes(query[0])) return 100 + tokens.length;
+  return 0;
+}
+
+function addCandidate(
+  collection: Map<string, SearchCandidate>,
+  name: string,
+  query: string[],
+  source: "atoz" | "oneMg" | "mid",
+  record?: AtoZRecord,
+): void {
+  const score = scoreName(name, query);
+  if (score <= 0) return;
+  const form = inferForm(record?.packSize ?? "", name);
+  const normalizedName = nameKey(name);
+  const baseKey = `${normalizedName}|${form.toLowerCase()}`;
+  const unverifiedKey = `${normalizedName}|unverified`;
+  // If a source omits the dosage form and there is exactly one already-known
+  // form for that normalized name, merge source details into that entry only.
+  let key = baseKey;
+  if (form === "Unverified") {
+    const keys = [...collection.keys()].filter((candidateKey) => candidateKey.startsWith(`${normalizedName}|`));
+    if (keys.length === 1) key = keys[0];
+  } else if (collection.has(unverifiedKey)) {
+    const keys = [...collection.keys()].filter((candidateKey) => candidateKey.startsWith(`${normalizedName}|`));
+    if (keys.length === 1) key = unverifiedKey;
+  }
+  const current = collection.get(key);
+  if (!current) {
+    collection.set(key, {
+      key,
+      name,
+      form,
+      score,
+      sourceRank: source === "atoz" ? 0 : source === "oneMg" ? 1 : 2,
+      ...(record ? { aToZ: record } : {}),
+      ...(source === "oneMg" ? { oneMgName: name } : {}),
+      ...(source === "mid" ? { midName: name } : {}),
+    });
+    return;
+  }
+  current.score = Math.max(current.score, score);
+  if (record && !current.aToZ) {
+    current.aToZ = record;
+    current.name = record.name;
+    current.form = form;
+  }
+  if (source === "oneMg") current.oneMgName = current.oneMgName ?? name;
+  if (source === "mid") current.midName = current.midName ?? name;
+  current.sourceRank = Math.min(current.sourceRank, source === "atoz" ? 0 : source === "oneMg" ? 1 : 2);
+}
+
+function lookupDetails(index: Map<string, DatasetDetails>, name: string, packSize = ""): DatasetDetails | undefined {
+  const form = inferForm(packSize, name);
+  const exact = index.get(detailKey(name, form));
+  if (exact) return exact;
+  if (form !== "Unverified") return index.get(detailKey(name, "Unverified"));
+  const prefix = `${nameKey(name)}|`;
+  const matches = [...index.entries()].filter(([key]) => key.startsWith(prefix));
+  return matches.length === 1 ? matches[0][1] : undefined;
+}
+
+function buildUnverifiedRecord(
+  record: AtoZRecord | undefined,
+  name: string,
+  details: DatasetDetails | undefined,
+  sourceLabels: string[],
+): Medicine {
+  const product = record;
+  const listedComposition = [product?.composition1, product?.composition2].filter(Boolean).join(" + ") || details?.composition || "";
+  return {
+    name,
+    composition: "",
+    category: details?.therapeuticClass || "Dataset entry (clinical classification unverified)",
+    schedule: "Unverified",
+    mrp: 0,
+    alternatives: [], // Deliberately not populated from the unverified substitute columns.
+    activeIngredients: [],
+    strength: "Unverified",
+    dosageForm: inferForm(product?.packSize ?? "", name),
+    compositionVerified: false,
+    priceComparison: [],
+    datasetPrice: product?.price ?? undefined,
+    datasetComposition: listedComposition || undefined,
+    datasetType: product?.productType || undefined,
+    manufacturer: product?.manufacturer || undefined,
+    packSize: product?.packSize || undefined,
+    datasetSource: sourceLabels.join("; ") || "Medicine information dataset",
+    ...detailToFields(details),
+  };
+}
+
+function getSourceStatus(aToZ: AtoZIndex, oneMg: DatasetIndex, mid: DatasetIndex) {
+  return {
+    aToZ: { available: aToZ.available, records: aToZ.records.length, file: aToZ.file, ...(aToZ.error ? { error: aToZ.error } : {}) },
+    kaggle250k: { available: oneMg.available, records: oneMg.records, file: oneMg.file, ...(oneMg.error ? { error: oneMg.error } : {}) },
+    mendeleyMID: { available: mid.available, records: mid.records, file: mid.file, ...(mid.error ? { error: mid.error } : {}) },
+  };
+}
+
+function getFilePresenceStatus() {
+  const oneMgFile = ONE_MG_CANDIDATE_FILES.find(existsSync);
+  const midFile = MID_CANDIDATE_FILES.find(existsSync);
+  return {
+    aToZ: { available: existsSync(ATOZ_FILE), file: path.basename(ATOZ_FILE) },
+    kaggle250k: { available: Boolean(oneMgFile), file: path.basename(oneMgFile ?? ONE_MG_CANDIDATE_FILES[0]) },
+    mendeleyMID: { available: Boolean(midFile), file: path.basename(midFile ?? MID_CANDIDATE_FILES[0]) },
+  };
+}
+
+/**
+ * Status: /api/medicines/search?status=1
+ * Search: /api/medicines/search?q=Ascoril%20D%20Plus%20Syrup
+ */
+export async function GET(request: Request) {
+  // Keep request.url access outside try/catch. Next.js Cache Components may use
+  // a prerender-bailout signal here; swallowing it logs a misleading data error.
+  const url = new URL(request.url);
+  const query = url.searchParams.get("q")?.trim() ?? "";
+  const statusOnly = url.searchParams.get("status") === "1";
+
+  if (statusOnly) return Response.json({ medicines: [], sources: getFilePresenceStatus() });
+  if (!query) return Response.json({ medicines: [], sources: getFilePresenceStatus() });
+
+  try {
+    // Sequential loading reduces peak memory use for the three large datasets.
+    const aToZ = await getAtoZCatalog();
+    const oneMg = await getOneMgIndex();
+    const mid = await getMidIndex();
+    const sources = getSourceStatus(aToZ, oneMg, mid);
+
+    const tokens = queryTokens(query);
+    if (!tokens.length) return Response.json({ medicines: [], sources });
+
+    const candidates = new Map<string, SearchCandidate>();
+    for (const record of aToZ.records) {
+      if (record.discontinued) continue;
+      addCandidate(candidates, record.name, tokens, "atoz", record);
+    }
+    for (const name of oneMg.names) addCandidate(candidates, name, tokens, "oneMg");
+    for (const name of mid.names) addCandidate(candidates, name, tokens, "mid");
+
+    const matches = [...candidates.values()]
+      .sort((a, b) => b.score - a.score || a.sourceRank - b.sourceRank || a.name.localeCompare(b.name))
+      .slice(0, 12);
+
+    const response: Medicine[] = [];
+    const seen = new Set<string>();
+    for (const candidate of matches) {
+      const record = candidate.aToZ;
+      const lookupName = record?.name ?? candidate.name;
+      const form = inferForm(record?.packSize ?? "", lookupName);
+      const curated = record ? curatedMatch(record.name, record.packSize) : curatedMatch(lookupName, "");
+      const oneMgDetails = lookupDetails(oneMg.index, candidate.oneMgName ?? lookupName, record?.packSize ?? "");
+      const midDetails = lookupDetails(mid.index, candidate.midName ?? lookupName, record?.packSize ?? "");
+      const details = mergeDetails(oneMgDetails, midDetails);
+      const exactSeenKey = `${nameKey(lookupName)}|${form.toLowerCase()}`;
+      if (seen.has(exactSeenKey)) continue;
+      seen.add(exactSeenKey);
+
+      const sourceLabels = [
+        record ? "A–Z Medicine Dataset of India (uploaded CSV)" : "",
+        candidate.oneMgName ? "Kaggle 250k Medicines Usage, Side Effects and Substitutes" : "",
+        candidate.midName ? "MID: Medicines Information Dataset (Mendeley Data)" : "",
+      ].filter(Boolean);
+
+      // Known Schedule H medicines are intentionally not enriched with source
+      // details. The client-side curated prescription guard is still authoritative.
+      if (curated?.schedule === "Schedule H") continue;
+
+      if (!curated || curated.schedule !== "OTC") {
+        response.push(buildUnverifiedRecord(record, lookupName, details, sourceLabels));
+        continue;
+      }
+
+      const referenceComposition = [record?.composition1, record?.composition2].filter(Boolean).join(" + ") || details?.composition || undefined;
+      response.push({
+        ...curated,
+        // Keep catalog price separate from curated MRP and demo partner quotes.
+        datasetPrice: record?.price ?? curated.datasetPrice,
+        datasetComposition: referenceComposition ?? curated.datasetComposition,
+        datasetType: record?.productType || curated.datasetType,
+        manufacturer: record?.manufacturer || curated.manufacturer,
+        packSize: record?.packSize || curated.packSize,
+        datasetSource: sourceLabels.join("; ") || curated.datasetSource || "MediBot curated catalogue",
+        ...detailToFields(details),
+      });
+    }
+
+    return Response.json({ medicines: response, sources });
+  } catch (error) {
+    console.error("MediBot dataset lookup failed:", error);
+    // Return a diagnostic response rather than crashing the chat if one source
+    // is absent or malformed. In normal operation each loader catches its own errors.
+    return Response.json({
+      medicines: [],
+      sources: {
+        aToZ: { available: false, file: path.basename(ATOZ_FILE) },
+        kaggle250k: { available: false, file: path.basename(ONE_MG_CANDIDATE_FILES[0]) },
+        mendeleyMID: { available: false, file: path.basename(MID_CANDIDATE_FILES[0]) },
+      },
+      error: "Medicine datasets could not be queried. Restart the development server after adding or replacing data files.",
+    }, { status: 200 });
+  }
+}

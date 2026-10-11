@@ -1,0 +1,271 @@
+@import "tailwindcss";
+
+/* MediBot — polished healthcare dashboard theme */
+:root {
+  --background: #f4f7ff;
+  --foreground: #102846;
+  --card: #ffffff;
+  --line: #e3eafa;
+  --muted: #64758d;
+  --brand: #2563eb;
+  --brand-dark: #1d4ed8;
+  --mint: #dcfce9;
+  --shadow-soft: 0 12px 34px -24px rgba(18, 42, 80, 0.24);
+  --shadow-card: 0 3px 8px rgba(25, 55, 100, 0.035), 0 18px 42px -30px rgba(25, 55, 100, 0.26);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+* {
+  box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: #c5d3e9 transparent;
+}
+
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 84px;
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  color: var(--foreground);
+  background:
+    radial-gradient(900px 460px at 8% -6%, rgba(207, 225, 255, 0.72), transparent 65%),
+    radial-gradient(850px 430px at 100% 2%, rgba(231, 222, 255, 0.58), transparent 63%),
+    radial-gradient(900px 500px at 52% 105%, rgba(205, 246, 230, 0.44), transparent 65%),
+    var(--background);
+  background-attachment: fixed;
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: #c5d3e9; border-radius: 999px; }
+*::-webkit-scrollbar-thumb:hover { background: #9fb3d3; }
+
+::selection { background: #d8e6ff; color: #102846; }
+:focus-visible { outline: 3px solid rgba(37, 99, 235, 0.72); outline-offset: 3px; }
+
+/* Brand and readable semantic colors */
+.text-navy { color: var(--foreground); }
+.text-muted { color: var(--muted); }
+.text-gradient {
+  background: linear-gradient(110deg, #2563eb 0%, #4f46e5 52%, #8b5cf6 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Main header */
+header {
+  border-color: rgba(220, 230, 246, 0.92) !important;
+  background: rgba(255, 255, 255, 0.86) !important;
+  box-shadow: 0 5px 22px -20px rgba(15, 42, 77, 0.5);
+  backdrop-filter: blur(18px);
+}
+header > div {
+  min-height: 58px;
+}
+header h1 { letter-spacing: -0.04em; }
+
+/* Cards: lighter borders, softer depth, consistent rounding */
+.card {
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  box-shadow: var(--shadow-card);
+  transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+}
+.card-hover:hover {
+  border-color: #cad9f4;
+  box-shadow: 0 7px 16px rgba(28, 66, 128, 0.055), 0 24px 48px -32px rgba(28, 66, 128, 0.32);
+  transform: translateY(-2px);
+}
+
+/* Welcome hero: signature blue/lavender glow with subtle ornament */
+.hero-panel {
+  position: relative;
+  isolation: isolate;
+  border: 1px solid #dce7fb;
+  border-radius: 24px;
+  background:
+    radial-gradient(260px 210px at 98% 0%, rgba(211, 219, 255, 0.52), transparent 72%),
+    linear-gradient(135deg, #ffffff 0%, #f4f8ff 54%, #f3efff 100%);
+  box-shadow: 0 16px 44px -32px rgba(37, 99, 235, 0.40);
+}
+.hero-panel::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  width: 170px;
+  height: 170px;
+  top: -78px;
+  right: -58px;
+  border: 1px solid rgba(120, 148, 232, 0.17);
+  border-radius: 50%;
+  box-shadow: 0 0 0 20px rgba(120, 148, 232, 0.045), 0 0 0 42px rgba(120, 148, 232, 0.035);
+  pointer-events: none;
+}
+.hero-panel h2 { letter-spacing: -0.045em; line-height: 1.12; }
+.hero-panel > div:first-child { box-shadow: 0 2px 8px rgba(37, 99, 235, 0.045); }
+.hero-panel > div:last-child > .card {
+  min-height: 132px;
+  border-radius: 17px;
+  background: rgba(255, 255, 255, 0.88);
+}
+.hero-panel > div:last-child > .card > div:first-child { box-shadow: 0 4px 12px rgba(37, 99, 235, 0.055); }
+
+/* Left and right navigation */
+.side-link {
+  display: flex;
+  width: 100%;
+  min-height: 41px;
+  align-items: center;
+  gap: 0.65rem;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  padding: 0.62rem 0.72rem;
+  color: #435772;
+  font-size: 0.84rem;
+  font-weight: 550;
+  text-align: left;
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease, border-color 160ms ease, transform 160ms ease;
+}
+.side-link:hover {
+  border-color: #e2eafe;
+  background: #f1f6ff;
+  color: #1d4ed8;
+}
+.side-link:active { transform: scale(0.99); }
+.side-link-active {
+  border-color: #d5e3ff;
+  background: linear-gradient(100deg, #e8f0ff 0%, #f0f4ff 100%);
+  color: #1d4ed8;
+  font-weight: 700;
+  box-shadow: inset 3px 0 0 #2563eb, 0 2px 7px rgba(37, 99, 235, 0.04);
+}
+
+/* Primary button */
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border: 1px solid #2563eb;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #3478f6, #255be6);
+  color: #fff;
+  padding: 0.68rem 1.1rem;
+  font-size: 0.875rem;
+  font-weight: 650;
+  line-height: 1.25rem;
+  cursor: pointer;
+  box-shadow: 0 8px 18px -12px rgba(37, 99, 235, 0.9);
+  transition: background 170ms ease, transform 170ms ease, box-shadow 170ms ease;
+}
+.btn-primary:hover {
+  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  box-shadow: 0 12px 24px -12px rgba(37, 99, 235, 0.72);
+  transform: translateY(-1px);
+}
+.btn-primary:active { transform: translateY(0) scale(0.99); }
+.btn-primary:disabled { opacity: 0.48; cursor: not-allowed; transform: none; box-shadow: none; }
+
+/* Chat surface */
+section[aria-label="Chat with MediBot"] { box-shadow: 0 10px 34px -28px rgba(15, 42, 77, 0.32); }
+section[aria-label="Chat with MediBot"] > div:first-child { background: linear-gradient(110deg, #fff 0%, #f9fbff 100%); }
+section[aria-label="Chat with MediBot"] [ref] { overscroll-behavior: contain; }
+section[aria-label="Chat with MediBot"] input {
+  min-height: 48px;
+  border-radius: 14px;
+  box-shadow: 0 2px 4px rgba(15, 42, 77, 0.025);
+}
+section[aria-label="Chat with MediBot"] input:focus {
+  border-color: #8bb1ff;
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.09);
+}
+section[aria-label="Chat with MediBot"] .msg-in { animation: message-in 260ms ease-out both; }
+
+/* Input and select components throughout the app */
+input, textarea, select { max-width: 100%; }
+select, textarea { border-radius: 12px; }
+input::placeholder, textarea::placeholder { color: #94a3b8; }
+button { -webkit-tap-highlight-color: transparent; }
+
+/* Evaluate/report sections */
+#evaluation, #savings-calculator, #cabinet { scroll-margin-top: 90px; }
+#evaluation > div:first-child,
+#savings-calculator > div:first-child { border-bottom-color: #e3eafa; }
+#evaluation details {
+  overflow: hidden;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+#evaluation details:hover { border-color: #cbdaf3; }
+#evaluation details[open] { box-shadow: 0 4px 14px rgba(15, 42, 77, 0.045); }
+#evaluation summary { transition: background 160ms ease; }
+#evaluation summary:hover { background: #f8fbff; }
+
+/* Secondary sidebar cards */
+[aria-label="Quick information"] > .card { border-radius: 18px; }
+[aria-label="Quick information"] h3 { letter-spacing: 0.08em; }
+
+/* Footer and fixed safety copy */
+footer {
+  margin-top: 1.5rem;
+  background: rgba(255, 255, 255, 0.74) !important;
+  backdrop-filter: blur(12px);
+}
+
+/* Medicine reminder styles retain their component colors while matching theme */
+.reminders-scope .text-slate-200 { color: var(--foreground); }
+.reminders-scope .text-slate-300,
+.reminders-scope .text-slate-400 { color: var(--muted); }
+.reminders-scope .text-blue-300 { color: #1d4ed8; }
+
+@keyframes message-in {
+  from { opacity: 0; transform: translateY(7px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.msg-in { animation: message-in 0.28s ease-out both; }
+
+/* Mid-sized screens: give the conversation breathing room by hiding the
+   optional right rail. It remains visible at desktop widths. */
+@media (min-width: 1024px) and (max-width: 1279px) {
+  aside[aria-label="Quick information"] { display: none !important; }
+  main { padding-left: 0.75rem; padding-right: 0.75rem; }
+}
+
+@media (max-width: 1023px) {
+  .hero-panel { padding: 1.25rem; }
+  .hero-panel > div:last-child > .card { min-height: unset; }
+  main { width: 100%; }
+}
+
+@media (max-width: 640px) {
+  .card { border-radius: 16px; }
+  .hero-panel { border-radius: 19px; }
+  .hero-panel h2 { font-size: 1.8rem; }
+  .hero-panel > div:last-child > .card { padding: 0.9rem; }
+  header > div { padding-left: 1rem; padding-right: 1rem; }
+  footer { margin-top: 0.75rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
